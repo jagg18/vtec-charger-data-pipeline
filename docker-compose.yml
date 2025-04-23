@@ -88,5 +88,5 @@ services:
     ports:
       - "8085:80"
     depends_on:
-      postgres_zoomcamp:
+      postgres_vtec:
         condition: service_started
