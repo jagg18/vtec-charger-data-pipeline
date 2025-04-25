@@ -1,0 +1,63 @@
+id: upload_local_data_to_motherduck
+namespace: vtec
+
+tasks:
+  - id: build
+    type: io.kestra.plugin.docker.Build
+    dockerfile: |
+      FROM python:3.10
+      RUN pip install --upgrade pip
+      RUN pip install --no-cache-dir pandas duckdb
+    tags:
+      - python_image
+  
+  - id: upload
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+    containerImage: "{{outputs.build.imageId}}"
+    script: |
+      import duckdb
+
+      conn = duckdb.connect(f"md:{{kv('MOTHERDUCK_DB_NAME')}}?motherduck_token={{kv('MOTHERDUCK_TOKEN')}}")
+
+      duckdb.sql("""
+        -- Connect to a MotherDuck database. 
+        -- ATTACH 'md:vtec_db2';
+        USE '{{kv('MOTHERDUCK_DB_NAME')}}';
+
+        -- Optionally create a schema, by default MotherDuck uses the main schema;
+        CREATE SCHEMA IF NOT EXISTS vtec_charge_meter;
+
+        -- Ingest data from PostgreSQL to a MotherDuck table
+        CREATE OR REPLACE TABLE vtec_charge_meter.fact_meter_readings AS 
+        SELECT * FROM 
+            postgres_scan('dbname=postgres-vtec host=host.docker.internal user={{kv('PG_USER')}} password={{kv('PG_PASS')}} connect_timeout=10',
+            'vtec_dbt',
+            'fact_meter_readings')
+        """, connection=conn)
+
+      conn.close()
+
+# pluginDefaults:
+#   - type: io.kestra.plugin.jdbc.postgresql
+#     values:
+#       url: jdbc:postgresql://host.docker.internal:5432/postgres-vtec
+#       username: "{{kv('PG_USER')}}"
+#       password: "{{kv('PG_PASS')}}"
+  
+triggers:
+  - id: flow_trigger
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: vtec
+        flowId: ekm_dbt
+  # - id: monthly
+  #   type: io.kestra.plugin.core.trigger.Schedule
+  #   cron: 0 2 1 * *
+    # stopAfter:
+    #   - FAILED
+    # inputs:
+    #   meter: ["35272", "10030675", "10030685"]

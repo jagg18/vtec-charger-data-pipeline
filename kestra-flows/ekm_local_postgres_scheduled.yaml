@@ -1,0 +1,222 @@
+id: ekm_local_postgres_scheduled
+description: Download monthly CSV, stage, and insert to local PostgreSQL
+namespace: vtec
+
+inputs:
+  - id: start_date
+    type: DATETIME
+    displayName: Select start date
+  - id: meter
+    type: MULTISELECT
+    displayName: Select meter id
+    values: ["35272", "10030675", "10030685"]
+    defaults: ["35272", "10030675", "10030685"]
+  - id: fields
+    type: MULTISELECT
+    displayName: Select fields
+    values:
+      - kWh_Tot
+      - kWh_Tariff_1
+      - kWh_Tariff_2
+      - kWh_Tariff_3
+      - kWh_Tariff_4
+      - Rev_kWh_Tot
+      - Rev_kWh_Tariff_1
+      - Rev_kWh_Tariff_2
+      - Rev_kWh_Tariff_3
+      - Rev_kWh_Tariff_4
+      - RMS_Volts_Ln_1
+      - RMS_Volts_Ln_2
+      - RMS_Volts_Ln_3
+      - Amps_Ln_1
+      - Amps_Ln_2
+      - Amps_Ln_3
+      - Power_Factor_Ln_1
+      - Power_Factor_Ln_2
+      - Power_Factor_Ln_3
+      - RMS_Watts_Ln_1
+      - RMS_Watts_Ln_2
+      - RMS_Watts_Ln_3
+      - RMS_Watts_Tot
+      - RMS_Watts_Max_Demand
+      - CT_Ratio
+      - Pulse_Cnt_1
+      - Pulse_Cnt_2
+      - Pulse_Cnt_3
+      - Pulse_Ratio_1
+      - Pulse_Ratio_2
+      - Pulse_Ratio_3
+      - Reactive_Energy_Tot
+      - kWh_Rst
+      - Rev_kWh_Rst
+      - Reactive_Pwr_Ln_1
+      - Reactive_Pwr_Ln_2
+      - Reactive_Pwr_Ln_3
+      - Reactive_Pwr_Tot
+      - Line_Freq
+      - kWh_Ln_1
+      - kWh_Ln_2
+      - kWh_Ln_3
+      - Rev_kWh_Ln_1
+      - Rev_kWh_Ln_2
+      - Rev_kWh_Ln_3
+      - Max_Demand_Rst
+      - Net_Calc_Watts_Ln_1
+      - Net_Calc_Watts_Ln_2
+      - Net_Calc_Watts_Ln_3
+      - Net_Calc_Watts_Tot
+      - CF_Ratio
+    defaults: ["kWh_Tot"]
+
+variables:
+  report_month: "{{ trigger.date ?? inputs.start_date | dateAdd(-1, 'MONTHS') | date('MMM yyyy') }}"
+  start_date: "{{ trigger.date ?? inputs.start_date | dateAdd(-1, 'MONTHS') | date('yyyyMM010000') }}"
+  end_date: "{{ trigger.date ?? inputs.start_date | date('yyyyMM010000') }}"
+  table: "public.ekm_meter_data"
+  staging_table: "public.ekm_meter_data_staging"
+
+tasks:
+  - id: set_label
+    type: io.kestra.plugin.core.execution.Labels
+    labels:
+      report_month: "{{render(vars.report_month)}}"
+      from: "{{render(vars.start_date)}}"
+      to: "{{render(vars.end_date)}}"
+
+  - id: extract
+    type: io.kestra.plugin.core.http.Download
+    uri: https://summary.ekmmetering.com/summary/api/v2/meter?key={{kv('EKM_API_KEY')}}&format=csv&devices={{inputs.meter | join('~')}}&fields={{ inputs.fields | join('~') }}&start_date={{render(vars.start_date)}}&end_date={{render(vars.end_date)}}&report=hr&limit=100000&normalize=1
+
+  - id: build
+    type: io.kestra.plugin.docker.Build
+    dockerfile: |
+      FROM python:3.10
+      RUN pip install --upgrade pip
+      RUN pip install --no-cache-dir pandas
+    tags:
+      - python_image
+  
+  - id: clean_csv
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+    containerImage: "{{outputs.build.imageId}}"
+    inputFiles:
+        data.csv: "{{outputs.extract.uri}}"
+    script: |
+      import pandas as pd
+      
+      # Load CSV
+      df = pd.read_csv('data.csv')
+
+      # Convert millisecond columns to timestamp and insert at index 0
+      df.insert(0, 'Start_Time_Stamp', pd.to_datetime(df['Start_Time_Stamp_UTC_ms'], unit='ms', utc=True))
+      df.insert(1, 'End_Time_Stamp', pd.to_datetime(df['End_Time_Stamp_UTC_ms'], unit='ms', utc=True))
+
+      # Optionally drop the original millisecond columns
+      df = df.drop(columns=['End_Time_Stamp_UTC_ms', 'Start_Time_Stamp_UTC_ms'])
+
+      # Columns to remove
+      columns_to_drop = [
+          "Start_Date",
+          "End_Date",
+          "kWh_Tot_DeltaMax"
+      ]
+
+      # Drop them if they exist in the CSV
+      df = df.drop(columns=[col for col in columns_to_drop if col in df.columns])
+
+      # Convert column names to lowercase
+      df.columns = df.columns.str.lower()
+
+      # Save cleaned CSV
+      df.to_csv("cleaned.csv", index=False)
+    outputFiles:
+      - cleaned.csv
+
+  - id: create_table
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      CREATE TABLE IF NOT EXISTS {{vars.table}} (
+          unique_row_id            text,
+          start_time_stamp         timestamp,
+          end_time_stamp           timestamp,
+          meter                    text,
+          count                    bigint,
+          protocol                 text,
+          kwh_tot_first            double precision,
+          kwh_tot_last             double precision,
+          kwh_tot_diff             double precision
+      );
+
+  - id: create_staging_table
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      CREATE TABLE IF NOT EXISTS {{vars.staging_table}} (
+          unique_row_id            text,
+          start_time_stamp         timestamp,
+          end_time_stamp           timestamp,
+          meter                    text,
+          count                    bigint,
+          protocol                 text,
+          kwh_tot_first            double precision,
+          kwh_tot_last             double precision,
+          kwh_tot_diff             double precision
+      );
+
+  - id: copy_in_to_staging_table
+    type: io.kestra.plugin.jdbc.postgresql.CopyIn
+    format: CSV
+    from: "{{outputs.clean_csv.outputFiles['cleaned.csv']}}"
+    table: "{{render(vars.staging_table)}}"
+    header: true
+    columns: [start_time_stamp,end_time_stamp,meter,count,protocol,kwh_tot_first,kwh_tot_last,kwh_tot_diff]
+
+  - id: add_unique_id
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      UPDATE {{vars.staging_table}}
+      SET 
+        unique_row_id = md5(
+          COALESCE(CAST(meter AS text), '') ||
+          COALESCE(CAST(start_time_stamp AS text), '') || 
+          COALESCE(CAST(end_time_stamp AS text), '') || 
+          COALESCE(CAST(kwh_tot_first AS text), '') || 
+          COALESCE(CAST(kwh_tot_last AS text), '')      
+        );
+
+  - id: merge_data
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      MERGE INTO {{vars.table}} AS T
+      USING {{vars.staging_table}} AS S
+      ON T.unique_row_id = S.unique_row_id
+      WHEN NOT MATCHED THEN
+        INSERT (
+          unique_row_id, start_time_stamp, end_time_stamp, meter, count, protocol, kwh_tot_first, kwh_tot_last, kwh_tot_diff
+        )
+        VALUES (
+          S.unique_row_id, S.start_time_stamp, S.end_time_stamp, S.meter, S.count, S.protocol, S.kwh_tot_first, S.kwh_tot_last, S.kwh_tot_diff
+        );
+
+  - id: truncate_staging_table
+    type: io.kestra.plugin.jdbc.postgresql.Queries
+    sql: |
+      TRUNCATE TABLE {{vars.staging_table}};
+
+pluginDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql
+    values:
+      url: jdbc:postgresql://host.docker.internal:5432/postgres-vtec
+      username: "{{kv('PG_USER')}}"
+      password: "{{kv('PG_PASS')}}"
+  
+triggers:
+  - id: monthly
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: 0 1 1 * *
+    # stopAfter:
+    #   - FAILED
+    # inputs:
+    #   meter: ["35272", "10030675", "10030685"]

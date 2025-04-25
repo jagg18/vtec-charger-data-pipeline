@@ -1,0 +1,113 @@
+id: ekm_upload_to_gcs
+description: Download monthly CSV, stage, and upload to GCS
+namespace: vtec
+
+inputs:
+  - id: start_date
+    type: DATETIME
+    displayName: Select start date
+  - id: meter
+    type: MULTISELECT
+    displayName: Select meter id
+    values: ["35272", "10030675", "10030685"]
+    defaults: ["35272", "10030675", "10030685"]
+  - id: fields
+    type: MULTISELECT
+    displayName: Select fields
+    values:
+      - kWh_Tot
+      - kWh_Tariff_1
+      - kWh_Tariff_2
+      - kWh_Tariff_3
+      - kWh_Tariff_4
+      - Rev_kWh_Tot
+      - Rev_kWh_Tariff_1
+      - Rev_kWh_Tariff_2
+      - Rev_kWh_Tariff_3
+      - Rev_kWh_Tariff_4
+      - RMS_Volts_Ln_1
+      - RMS_Volts_Ln_2
+      - RMS_Volts_Ln_3
+      - Amps_Ln_1
+      - Amps_Ln_2
+      - Amps_Ln_3
+      - Power_Factor_Ln_1
+      - Power_Factor_Ln_2
+      - Power_Factor_Ln_3
+      - RMS_Watts_Ln_1
+      - RMS_Watts_Ln_2
+      - RMS_Watts_Ln_3
+      - RMS_Watts_Tot
+      - RMS_Watts_Max_Demand
+      - CT_Ratio
+      - Pulse_Cnt_1
+      - Pulse_Cnt_2
+      - Pulse_Cnt_3
+      - Pulse_Ratio_1
+      - Pulse_Ratio_2
+      - Pulse_Ratio_3
+      - Reactive_Energy_Tot
+      - kWh_Rst
+      - Rev_kWh_Rst
+      - Reactive_Pwr_Ln_1
+      - Reactive_Pwr_Ln_2
+      - Reactive_Pwr_Ln_3
+      - Reactive_Pwr_Tot
+      - Line_Freq
+      - kWh_Ln_1
+      - kWh_Ln_2
+      - kWh_Ln_3
+      - Rev_kWh_Ln_1
+      - Rev_kWh_Ln_2
+      - Rev_kWh_Ln_3
+      - Max_Demand_Rst
+      - Net_Calc_Watts_Ln_1
+      - Net_Calc_Watts_Ln_2
+      - Net_Calc_Watts_Ln_3
+      - Net_Calc_Watts_Tot
+      - CF_Ratio
+    defaults: ["kWh_Tot"]
+
+variables:
+  report_month: "{{ trigger.date ?? inputs.start_date | dateAdd(-1, 'MONTHS') | date('MMM yyyy') }}"
+  start_date: "{{ trigger.date ?? inputs.start_date | dateAdd(-1, 'MONTHS') | date('yyyyMM010000') }}"
+  end_date: "{{ trigger.date ?? inputs.start_date | date('yyyyMM010000') }}"
+  table: "public.ekm_meter_data"
+  staging_table: "public.ekm_meter_data_staging"
+  file: "ekm_data_{{render(vars.report_month)}}.parquet"
+  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/{{vars.file}}"
+
+tasks:
+  - id: set_label
+    type: io.kestra.plugin.core.execution.Labels
+    labels:
+      report_month: "{{render(vars.report_month)}}"
+      from: "{{render(vars.start_date)}}"
+      to: "{{render(vars.end_date)}}"
+
+  - id: extract
+    type: io.kestra.plugin.core.http.Download
+    uri: https://summary.ekmmetering.com/summary/api/v2/meter?key={{kv('EKM_API_KEY')}}&format=csv&devices={{inputs.meter | join('~')}}&fields={{ inputs.fields | join('~') }}&start_date={{render(vars.start_date)}}&end_date={{render(vars.end_date)}}&report=hr&limit=100000&normalize=1
+
+  - id: rename
+    type: io.kestra.plugin.scripts.shell.Commands
+    outputFiles:
+      - "*.csv"
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - "mv {{outputs.extract.uri}} {{render(vars.file)}}"
+
+  - id: upload_to_gcs
+    type: io.kestra.plugin.gcp.gcs.Upload
+    from: "{{render(vars.data)}}"
+    to: "{{render(vars.gcs_file)}}"
+  
+triggers:
+  - id: monthly
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: 0 9 1 * *
+    # stopAfter:
+    #   - FAILED
+    # inputs:
+    #   meter: ["35272", "10030675", "10030685"]

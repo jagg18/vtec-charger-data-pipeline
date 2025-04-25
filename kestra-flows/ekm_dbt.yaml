@@ -1,0 +1,47 @@
+id: ekm_dbt
+namespace: vtec
+
+tasks:
+  - id: dbt
+    type: io.kestra.plugin.core.flow.WorkingDirectory
+    tasks:
+      - id: cloneRepository
+        type: io.kestra.plugin.git.Clone
+        url: https://github.com/jagg18/dbt-vtec-charger-data/
+        branch: main
+
+      - id: dbt-build
+        type: io.kestra.plugin.dbt.cli.DbtCLI
+        containerImage: ghcr.io/kestra-io/dbt-postgres:latest
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+        commands:
+          - "dbt build --vars \"{\"is_test_run\": \"false\"}\""
+        profiles: |
+          vtec:
+            outputs:
+              prod:
+                dbname: postgres-vtec
+                type: postgres
+                host: host.docker.internal
+                user: "{{kv(namespace=flow.namespace, key='PG_USER')}}"
+                pass: "{{kv(namespace=flow.namespace, key='PG_PASS')}}"
+                port: 5432
+                schema: vtec_dbt
+                threads: 1
+            target: prod
+
+triggers:
+  - id: flow_trigger
+    type: io.kestra.plugin.core.trigger.Flow
+    conditions:
+      - type: io.kestra.plugin.core.condition.ExecutionFlow
+        namespace: vtec
+        flowId: ekm_local_postgres_scheduled
+  # - id: monthly
+  #   type: io.kestra.plugin.core.trigger.Schedule
+  #   cron: 30 1 1 * *
+    # stopAfter:
+    #   - FAILED
+    # inputs:
+    #   meter: ["35272", "10030675", "10030685"]
