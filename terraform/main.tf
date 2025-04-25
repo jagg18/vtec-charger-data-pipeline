@@ -8,13 +8,13 @@ terraform {
 }
 
 provider "google" {
-  credentials = file(var.credentials)
+  credentials = file(var.credentials[terraform.workspace])
   project     = var.project
   region      = var.region
 }
 
 resource "google_storage_bucket" "ekm_bucket" {
-  name          = var.gcs_ekm_bucket_name
+  name          = var.gcs_ekm_bucket_name[terraform.workspace]
   location      = var.location
   force_destroy = true
 
@@ -26,9 +26,4 @@ resource "google_storage_bucket" "ekm_bucket" {
       type = "AbortIncompleteMultipartUpload"
     }
   }
-}
-
-resource "google_bigquery_dataset" "vtec_charger_dataset" {
-  dataset_id = var.bq_dataset_name
-  location   = var.location
 }

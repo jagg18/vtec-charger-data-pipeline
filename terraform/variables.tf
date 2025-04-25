@@ -1,6 +1,10 @@
 variable "credentials" {
   description = "My Credentials"
-  default     = "~/keys/my-creds.json"
+  type = map(string)
+  default =  {
+    dev = "~/keys/my-creds.json"
+    prod   = "~/keys/my-creds.json"
+  }
 }
 
 variable "project" {
@@ -20,15 +24,14 @@ variable "location" {
 
 variable "gcs_ekm_bucket_name" {
   description = "EKM Data Bucket"
-  default     = "vtec-ekm-data-bucket"
+  type = map(string)
+  default = {
+    dev = "vtec-ekm-data-bucket-dev"
+    prod   = "vtec-ekm-data-bucket"
+  }
 }
 
 variable "gcs_storage_class" {
   description = "Bucket Storage Class"
   default     = "STANDARD"
-}
-
-variable "bq_dataset_name" {
-  description = "Dataset Name"
-  default     = "vtec_charger_dataset"
 }
