@@ -33,7 +33,7 @@ tasks:
         -- Ingest data from PostgreSQL to a MotherDuck table
         CREATE OR REPLACE TABLE vtec_charge_meter.fact_meter_readings AS 
         SELECT * FROM 
-            postgres_scan('dbname=postgres-vtec host=postgres_vtec user={{kv('PG_USER')}} password={{kv('PG_PASS')}} connect_timeout=10',
+            postgres_scan('dbname=postgres-vtec host=172.17.0.1 user={{kv('PG_USER')}} password={{kv('PG_PASS')}} connect_timeout=10',
             'vtec_dbt',
             'fact_meter_readings')
         """, connection=conn)
@@ -50,11 +50,12 @@ tasks:
 triggers:
   - id: flow_trigger
     type: io.kestra.plugin.core.trigger.Flow
-    conditions:
-      - type: io.kestra.plugin.core.condition.ExecutionFlow
-        namespace: vtec
-        flowId: ekm_dbt
-        states: [SUCCESS]
+    preconditions:
+      id: success_check
+      flows:
+        - namespace: vtec
+          flowId: ekm_dbt
+          states: [SUCCESS]
   # - id: monthly
   #   type: io.kestra.plugin.core.trigger.Schedule
   #   cron: 0 2 1 * *

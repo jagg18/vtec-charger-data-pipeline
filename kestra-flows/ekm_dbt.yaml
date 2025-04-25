@@ -23,7 +23,7 @@ tasks:
               prod:
                 dbname: postgres-vtec
                 type: postgres
-                host: postgres_vtec
+                host: 172.17.0.1
                 user: "{{kv(namespace=flow.namespace, key='PG_USER')}}"
                 pass: "{{kv(namespace=flow.namespace, key='PG_PASS')}}"
                 port: 5432
@@ -34,11 +34,12 @@ tasks:
 triggers:
   - id: flow_trigger
     type: io.kestra.plugin.core.trigger.Flow
-    conditions:
-      - type: io.kestra.plugin.core.condition.ExecutionFlow
-        namespace: vtec
-        flowId: ekm_local_postgres_scheduled
-        states: [SUCCESS]
+    preconditions:
+      id: success_check
+      flows:
+        - namespace: vtec
+          flowId: ekm_local_postgres_scheduled
+          states: [SUCCESS]
   # - id: monthly
   #   type: io.kestra.plugin.core.trigger.Schedule
   #   cron: 30 1 1 * *
