@@ -42,6 +42,8 @@ services:
             username: kestra
             password: k3str4
         kestra:
+          tutorialFlows:
+            enabled: false
           server:
             basicAuth:
               enabled: false
